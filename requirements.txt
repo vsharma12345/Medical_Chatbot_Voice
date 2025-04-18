@@ -1,0 +1,11 @@
+dotenv
+groq
+SpeechRecognition
+pydub   
+gtts
+elevenlabs
+pygame
+playsound==1.2.2
+save
+gradio
+pyperclip 
