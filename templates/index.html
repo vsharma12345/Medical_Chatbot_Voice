@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Doctor with Voice Recording</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { margin-bottom: 20px; }
+        .output { border: 1px solid #ddd; padding: 10px; margin-top: 10px; min-height: 50px; }
+        audio { width: 100%; margin-top: 10px; }
+        #recordBtn { padding: 10px 20px; font-size: 16px; margin-right: 10px; }
+        .recording { background-color: #ff4444; color: white; }
+        #timer { display: inline-block; margin-left: 10px; }
+        #visualizer { width: 100%; height: 50px; background: #f0f0f0; margin: 10px 0; }
+        .bar { display: inline-block; width: 2px; margin-right: 1px; background: #4CAF50; }
+        #imagePreview { max-width: 100%; margin-top: 10px; display: none; }
+        .recording-controls { display: flex; align-items: center; margin-bottom: 10px; }
+        #closeRecording { margin-left: 10px; display: none; }
+        #submitBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .spinner { 
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0,0,0,.3);
+            border-radius: 50%;
+            border-top-color: #000;
+            animation: spin 1s ease-in-out infinite;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>AI Doctor with Vision and Voice</h1>
+    
+    <div class="container">
+        <h3>Record your question:</h3>
+        <div class="recording-controls">
+            <button id="recordBtn">Start Recording</button>
+            <span id="timer">00:10</span>
+            <button id="closeRecording" title="Record again">✕</button>
+        </div>
+        <div id="visualizer"></div>
+        <div id="recordingStatus">Press button to start recording (10 seconds max)</div>
+        <audio id="audioPreview" controls style="display: none;"></audio>
+        <div id="audioError" class="error"></div>
+    </div>
+    
+    <div class="container">
+        <h3>Upload medical image (optional):</h3>
+        <input type="file" id="imageInput" accept="image/*">
+        <img id="imagePreview" alt="Image preview">
+    </div>
+    
+    <button id="submitBtn" disabled>
+        Submit to AI Doctor
+        <span id="submitSpinner" class="spinner" style="display: none;"></span>
+    </button>
+    
+    <div class="container">
+        <h3>Speech to Text:</h3>
+        <div id="speechOutput" class="output"></div>
+    </div>
+    
+    <div class="container">
+        <h3>Doctor's Response:</h3>
+        <div id="doctorOutput" class="output"></div>
+    </div>
+    
+    <div class="container">
+        <h3>Doctor's Voice:</h3>
+        <audio id="voiceOutput" controls style="display: none;"></audio>
+        <div id="voiceError" class="error"></div>
+    </div>
+
+    <script>
+        // Recording functionality
+        let mediaRecorder;
+        let audioChunks = [];
+        let currentAudioUrl = null;
+        let countdown;
+        let audioContext;
+        let analyser;
+        let animationId;
+        
+        // Initialize audio visualizer
+        function initVisualizer() {
+            const visualizer = document.getElementById('visualizer');
+            visualizer.innerHTML = '';
+            for (let i = 0; i < 100; i++) {
+                const bar = document.createElement('div');
+                bar.className = 'bar';
+                visualizer.appendChild(bar);
+            }
+        }
+        
+        // Update visualizer
+        function updateVisualizer() {
+            if (!analyser) return;
+            
+            const bars = document.querySelectorAll('.bar');
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            analyser.getByteFrequencyData(dataArray);
+            
+            bars.forEach((bar, i) => {
+                const value = dataArray[i] || 0;
+                bar.style.height = `${value / 2}px`;
+            });
+            
+            animationId = requestAnimationFrame(updateVisualizer);
+        }
+        
+        // Start countdown timer
+        function startTimer(duration) {
+            let timer = duration;
+            const element = document.getElementById('timer');
+            
+            countdown = setInterval(() => {
+                const seconds = parseInt(timer % 60, 10);
+                element.textContent = `00:${seconds < 10 ? "0" + seconds : seconds}`;
+                
+                if (--timer < 0) {
+                    clearInterval(countdown);
+                    stopRecording();
+                }
+            }, 1000);
+        }
+        
+        // Stop recording
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                document.getElementById('recordBtn').textContent = 'Start Recording';
+                document.getElementById('recordBtn').classList.remove('recording');
+                document.getElementById('recordingStatus').textContent = 'Recording complete';
+                document.getElementById('closeRecording').style.display = 'inline-block';
+                clearInterval(countdown);
+                cancelAnimationFrame(animationId);
+            }
+        }
+        
+        // Start recording
+        async function startRecording() {
+            try {
+                initVisualizer();
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                analyser.fftSize = 256;
+                
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    currentAudioUrl = URL.createObjectURL(audioBlob);
+                    
+                    document.getElementById('audioPreview').src = currentAudioUrl;
+                    document.getElementById('audioPreview').style.display = 'block';
+                    document.getElementById('audioError').textContent = '';
+                    
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob);
+                    
+                    try {
+                        const response = await fetch('/save_recording', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const data = await response.json();
+                        
+                        if (response.ok) {
+                            document.getElementById('submitBtn').disabled = false;
+                            document.getElementById('audioPreview').src = data.audio_url;
+                        } else {
+                            document.getElementById('audioError').textContent = data.error || 'Failed to save recording';
+                        }
+                    } catch (error) {
+                        document.getElementById('audioError').textContent = 'Failed to save recording: ' + error.message;
+                    }
+                };
+                
+                mediaRecorder.start();
+                document.getElementById('recordBtn').textContent = 'Stop Recording';
+                document.getElementById('recordBtn').classList.add('recording');
+                document.getElementById('recordingStatus').textContent = 'Recording...';
+                document.getElementById('closeRecording').style.display = 'none';
+                document.getElementById('submitBtn').disabled = true;
+                
+                startTimer(10);
+                updateVisualizer();
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                document.getElementById('audioError').textContent = 'Could not access microphone. Please check permissions.';
+            }
+        }
+        
+        // Reset recording
+        function resetRecording() {
+            document.getElementById('audioPreview').src = '';
+            document.getElementById('audioPreview').style.display = 'none';
+            document.getElementById('submitBtn').disabled = true;
+            document.getElementById('closeRecording').style.display = 'none';
+            document.getElementById('recordingStatus').textContent = 'Press button to start recording (10 seconds max)';
+            document.getElementById('audioError').textContent = '';
+        }
+        
+        // Image preview
+        document.getElementById('imageInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const img = document.getElementById('imagePreview');
+                    img.src = event.target.result;
+                    img.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Submit to AI Doctor
+        document.getElementById('submitBtn').addEventListener('click', async () => {
+            const imageFile = document.getElementById('imageInput').files[0];
+            const audioUrl = document.getElementById('audioPreview').src;
+            const audioFilename = audioUrl.split('/').pop();
+            
+            if (!audioFilename) {
+                alert('Please record your question first');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('audio_filename', audioFilename);
+            if (imageFile) {
+                formData.append('image', imageFile);
+            }
+
+            const submitBtn = document.getElementById('submitBtn');
+            const spinner = document.getElementById('submitSpinner');
+            submitBtn.disabled = true;
+            spinner.style.display = 'inline-block';
+            
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to process request');
+                }
+
+                // Display results
+                document.getElementById('speechOutput').textContent = data.speech_to_text || 'No transcription available';
+                document.getElementById('doctorOutput').textContent = data.doctor_response || 'No response from doctor';
+                
+                // Handle audio response
+                if (data.voice_url) {
+                    const voicePlayer = document.getElementById('voiceOutput');
+                    voicePlayer.src = data.voice_url;
+                    voicePlayer.style.display = 'block';
+                    voicePlayer.load();
+                    document.getElementById('voiceError').textContent = '';
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('voiceError').textContent = 'Error: ' + error.message;
+            } finally {
+                submitBtn.disabled = false;
+                spinner.style.display = 'none';
+            }
+        });
+
+        // Event listeners
+        document.getElementById('recordBtn').addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+        
+        document.getElementById('closeRecording').addEventListener('click', resetRecording);
+    </script>
+</body>
+</html>
